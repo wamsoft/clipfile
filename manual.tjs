@@ -1,0 +1,427 @@
+
+/**
+ * 擬似コードによるマニュアル
+ *
+ * CLIP STUDIO PAINT (.clip) 読み込み / 編集プラグイン clipfile.dll
+ *
+ * CLIPファイルストレージ機能
+ * 以下のパス名で CLIP ファイルのレイヤ画像を直接ファイルとしてロードできます
+ *
+ * clip://CLIPファイル名/root/フォルダ名/.../レイヤ名.bmp
+ * clip://CLIPファイル名/id/LayerId.bmp
+ *
+ * ・CLIPファイル名はベース名のみで小文字で正規化されます
+ * ・フォルダ名、レイヤ名は全て小文字で正規化されて含まれる"/" は "_" に置換されます
+ * ・名前が重複する場合は後にあるものが優先になります
+ * ・画像を持たないレイヤ(フォルダ・調整レイヤ・空レイヤ)は列挙されません
+ *
+ * psdfile プラグインの psd:// と同じ規則です。
+ */
+class CLIP {
+
+	// 画素取得モード (getLayerRegion の mode)
+	image_mode_image  = 0; // マスクを繰り込まない生画像
+	image_mode_mask   = 1; // マスクのみ(グレー)
+	image_mode_masked = 2; // マスクをアルファに繰り込んだ画像
+
+	/**
+	 * CLIP ファイルのロード。
+	 *
+	 * ローカルに実体があるファイルは mmap で開き、画素は 256x256 ブロック単位で
+	 * 必要になったときだけ読みます(大きなファイルでも load 自体は軽い)。
+	 * アーカイブ内などローカルパスに落ちない場合はストリームから全体をメモリへ
+	 * 読み込んでから解析します。
+	 * @param filename ファイル名
+	 * @return ロードに成功したら true(失敗理由は error プロパティ)
+	 */
+	function load(filename);
+
+	/**
+	 * octet に入った CLIP データをロードする。
+	 * バイト列はこのオブジェクトが保持します。ファイル名を持たないため
+	 * clip:// ストレージへは登録されません。
+	 * @param data ファイル全体を格納した octet
+	 * @return ロードに成功したら true
+	 */
+	function loadOctet(data);
+
+	/**
+	 * 保持しているデータを明示的に破棄する。
+	 * 吉里吉里のオブジェクト寿命は GC 依存なので、大きなファイルを掴んだままに
+	 * したくないときに呼びます。
+	 */
+	function clearData();
+
+	// 画像の基本プロパティ
+
+	/**
+	 * キャンバスの横幅(実ピクセル)。
+	 * CLIP の Canvas.CanvasWidth は CanvasUnit 依存で mm 単位のファイルが実在する
+	 * ため、100% ミップの属性から求めた実ピクセル値を返します。未ロードは -1
+	 */
+	property width { getter; }
+	property height { getter; } //< キャンバスの縦幅(実ピクセル)。未ロードは -1
+	property resolution { getter; } //< 解像度(dpi)。未ロードは 0
+	property layer_count { getter; } //< レイヤ数。未ロードは -1
+	property root_layer { getter; } //< ルートフォルダの LayerId。未ロードは -1
+	property is_loaded { getter; } //< ロード済みかどうか
+	property error { getter; } //< 直近の失敗理由。無ければ空文字列
+
+	/**
+	 * レイヤ名の取得
+	 * @param no レイヤ番号
+	 * @return レイヤ名
+	 */
+	function getLayerName(no);
+
+	/**
+	 * レイヤ情報の取得
+	 *
+	 * レイヤ番号 no は 0 から layer_count-1 までで、並び順は psdfile と同じ
+	 * 「中身が先、フォルダが後、下から上」の平坦順です。
+	 *
+	 * @param no レイヤ番号
+	 * @return レイヤ情報がはいった辞書
+	 * 辞書の内容
+	 * left         左座標(キャンバス座標)
+	 * top          上座標
+	 * right        右座標
+	 * bottom       底座標
+	 * width        横幅
+	 * height       縦幅
+	 * name         レイヤ名
+	 * layer_id     LayerId (CLIP の Layer.MainId)。CLIPWriter の各メソッドや
+	 *              clip://~/id/ で使うのはこの値
+	 * visible      表示状態
+	 * opacity      不透明度 0..255 (PSD / 吉里吉里 と揃えた値)
+	 * opacity_raw  不透明度の生値 0..**256** (CLIP は 256 段)
+	 * clipping     下のレイヤでクリッピングするか (0/1)
+	 * composite    合成モードの生値 (CLIP の LayerComposite。CLIPWriter の
+	 *              composite_* 定数と同じ値)
+	 * type         合成モード(吉里吉里の対応モード)。対応が無いモードは
+	 *              ltPsNormal に落ちるので、正確に見たいときは composite を使う
+	 * blend_mode_key 合成モードを PSD の 4 文字コードで表したもの。psdfile の
+	 *              getLayerInfo().blend_mode_key と見比べるとき用
+	 * is_group     フォルダレイヤか
+	 * is_filter    調整レイヤか(自分の画素を持たない)
+	 * is_text      テキストレイヤか
+	 * has_mask     レイヤマスクを持つか
+	 * folder       フォルダ属性の生値 (bit0=フォルダ / bit4=折り畳み)
+	 * collapsed    フォルダが折り畳まれているか
+	 * layer_type_raw LayerType の生値 (bit12(4096)=調整レイヤ / bit1(2)=マスク有)
+	 * parent_index 親フォルダのレイヤ番号(最上位は -1)
+	 * children     直接の子のレイヤ番号配列(下から上)。フォルダ以外は空配列
+	 */
+	function getLayerInfo(no);
+
+	/**
+	 * 最上位(ルート直下)のレイヤ番号配列を取得する。下から上の順
+	 * @return レイヤ番号の配列
+	 */
+	function getRoots();
+
+	/**
+	 * フォルダの直接の子のレイヤ番号配列を取得する。下から上の順
+	 * @param no レイヤ番号
+	 * @return レイヤ番号の配列(フォルダ以外は空配列)
+	 */
+	function getChildren(no);
+
+	/**
+	 * LayerId からレイヤ番号を引く
+	 * @param layerId getLayerInfo().layer_id の値
+	 * @return レイヤ番号。見つからなければ -1
+	 */
+	function getLayerIndexById(layerId);
+
+	/**
+	 * 100% ミップの Offscreen 属性を取得する(ブロックグリッドや表現色の確認用)
+	 * @param no   レイヤ番号
+	 * @param mask true でマスク側のミップ連鎖を見る。既定 false
+	 * @return %[ width:, height:,        // 論理サイズ
+	 *            cols:, rows:,           // ブロックグリッド
+	 *            color_mode:             // 33=RGBA / 17=グレー・モノクロ / 1=マスク
+	 *            num_channels:           // 4 / 1 / 0
+	 *            bit_depth:              // 5=8bpp RGBA / 2=8bpp / 1=1bpp
+	 *            plane_bytes:,
+	 *            block_width:, block_height:,
+	 *            has_init_color:,
+	 *            init_color:             // RGBA をパックした値
+	 *            block_count:            // ブロック数
+	 *          ]  実体が無ければ void
+	 *
+	 * **ここで返る width / height はキャンバスサイズとは限りません** — CSP は
+	 * レイヤによって 256x256 ブロック境界に切り上げた大きさ(300x400 のキャンバスでも
+	 * 512x512 等)で画素を持ちます。`CLIPWriter.setPixels` に渡す Layer のサイズは
+	 * この値に合わせる必要があるので、書き換えるときはここで調べてください。
+	 */
+	function getLayerAttribute(no, mask=false);
+
+	/**
+	 * レイヤ画像の読み出し(マスクをアルファに繰り込んだもの)
+	 * @param layer 読み出し先レイヤ
+	 * @param no レイヤ番号
+	 *
+	 * フォルダ・調整レイヤ・空レイヤは画像を持たないので何もしません
+	 * (吉里吉里の Layer は 0 サイズにできないため)。
+	 * データ内容のほか以下のプロパティが自動的にレイヤに設定されます
+	 * left          左座標
+	 * top           上座標
+	 * width         横幅
+	 * height        縦幅
+	 * type          合成モード
+	 * opacity       不透明度(0..255 に正規化した値)
+	 * visible       表示状態
+	 * imageLeft     0になります
+	 * imageTop      0になります
+	 * imageWidth    width になります
+	 * imageHeight   height になります
+	 * name          name が設定されます
+	 */
+	function getLayerData(layer, no);
+
+	/**
+	 * レイヤ画像の読み出し(マスクを繰り込まない生画像)。
+	 * 設定されるプロパティは getLayerData と同じ
+	 * @param layer 読み出し先レイヤ
+	 * @param no レイヤ番号
+	 */
+	function getLayerDataRaw(layer, no);
+
+	/**
+	 * レイヤのマスクのみ(グレー)の読み出し。
+	 * マスクを持たないレイヤでは何もしません。
+	 * opacity は 255、type は ltPsNormal になります
+	 * @param layer 読み出し先レイヤ
+	 * @param no レイヤ番号
+	 */
+	function getLayerDataMask(layer, no);
+
+	/**
+	 * レイヤ画像のうち指定矩形(キャンバス座標)だけを読み出す。
+	 *
+	 * CLIP は画素を 256x256 タイルで持っているので、**重なるタイルしか
+	 * 展開されません**。大きなレイヤの一部だけ欲しいときはこちらが安いです
+	 * (PSD は行 RLE なので同じことができない = clipparse 固有の口)。
+	 * 読み出し先 Layer の left/top には x/y が設定されます。
+	 * @param layer 読み出し先レイヤ
+	 * @param no    レイヤ番号
+	 * @param x     矩形の左(キャンバス座標)
+	 * @param y     矩形の上
+	 * @param w     矩形の幅
+	 * @param h     矩形の高さ
+	 * @param mode  image_mode_*(既定 image_mode_masked)
+	 */
+	function getLayerRegion(layer, no, x, y, w, h, mode=image_mode_masked);
+
+	/**
+	 * 全レイヤを下から合成した画像の取得。
+	 *
+	 * psdfile の getBlend が「PSD に保存済みの合成結果を読むだけ」なのとは違い、
+	 * こちらは clipparse 側で実際に合成します(CSP の CanvasPreview と一致するのが
+	 * 正しい状態)。合成モード 27 種・表現色 4 種・マスク・クリッピング・
+	 * 通過フォルダ・調整レイヤ 5 種に対応しています。
+	 * 保存済みの完成画をそのまま使いたいだけなら getPreviewPNG() の方が安いです。
+	 * @param layer 格納先レイヤ(キャンバスサイズに調整される)
+	 * @return 取得に成功したら true
+	 */
+	function getBlend(layer);
+
+	/**
+	 * ファイルに埋まっている完成画(CanvasPreview)を PNG の octet で返す。
+	 * CSP が保存した画そのものなので合成の計算が不要ですが、**等倍とは限りません**。
+	 * @return PNG データの octet。無ければ void
+	 */
+	function getPreviewPNG();
+
+	/**
+	 * 全ブロックの構造アサーションを回す(診断用)
+	 * @return 問題があればレポート文字列、問題が無ければ void
+	 */
+	function check();
+
+	/**
+	 * static method
+	 * ストレージとして保持されてるキャッシュをクリアする
+	 */
+	function clearStorageCache();
+};
+
+/**
+ * CLIP ファイルの編集 / 書き出しクラス。
+ *
+ * 読み側(CLIP)とは別クラスです。編集元をメモリへ全部読む(mmap しない)ので
+ * 同じパスへ書き戻せます。
+ *
+ * **書いたファイルは validate() を通してから CSP で開いてください。**
+ * 「こちらのリーダでは読めるのに CSP が受け付けない」種類の間違い(格納型・
+ * ミップ段数・チェックサム・サムネイルの世代番号・CanvasPreview)は
+ * clipparse 側が面倒を見ていますが、参照整合性の崩れは validate() でしか
+ * 検出できません。引っかかる状態のファイルは CSP で落ちたり全面透明になります。
+ *
+ * 使用例:
+ *   var w = new CLIPWriter();
+ *   w.load("in.clip");
+ *   w.setLayerAttr(5, %[ opacity: 128, composite: CLIPWriter.composite_multiply ]);
+ *   w.save("out.clip");
+ *   var problems = CLIPWriter.validate("out.clip");
+ *   if (problems.count) Debug.message(problems.join("\n"));
+ */
+class CLIPWriter {
+
+	// 合成モード(setLayerAttr の composite に渡す値。CLIP の LayerComposite)
+	composite_normal        = 0;  // 通常
+	composite_darken        = 1;  // 比較(暗)
+	composite_multiply      = 2;  // 乗算
+	composite_color_burn    = 3;  // 焼き込みカラー
+	composite_linear_burn   = 4;  // 焼き込み(リニア)
+	composite_subtract      = 5;  // 減算
+	composite_darker_color  = 6;  // 暗い色
+	composite_lighten       = 7;  // 比較(明)
+	composite_screen        = 8;  // スクリーン
+	composite_color_dodge   = 9;  // 覆い焼きカラー
+	composite_dodge_glow    = 10; // 覆い焼き(発光)
+	composite_add           = 11; // 加算
+	composite_add_glow      = 12; // 加算(発光)
+	composite_lighter_color = 13; // 明るい色
+	composite_overlay       = 14; // オーバーレイ
+	composite_soft_light    = 15; // ソフトライト
+	composite_hard_light    = 16; // ハードライト
+	composite_vivid_light   = 17; // ビビッドライト
+	composite_linear_light  = 18; // リニアライト
+	composite_pin_light     = 19; // ピンライト
+	composite_hard_mix      = 20; // ハードミックス
+	composite_difference    = 21; // 差の絶対値
+	composite_exclusion     = 22; // 除外
+	composite_hue           = 23; // 色相
+	composite_saturation    = 24; // 彩度
+	composite_color         = 25; // カラー
+	composite_luminosity    = 26; // 輝度
+	composite_pass_through  = 30; // 通過(フォルダ)
+	composite_divide        = 36; // 除算
+
+	/**
+	 * 編集元の CLIP ファイルを読む
+	 * @param filename ファイル名(ローカルパスに落ちる必要があります。
+	 *                 アーカイブ内のファイルは編集元にできず例外になります)
+	 * @return 成功したら true(失敗理由は error プロパティ)
+	 */
+	function load(filename);
+
+	/**
+	 * 現在の状態でファイルを組み立てて書き出す。
+	 * 無変更で書き戻した場合は元ファイルと sha256 が一致します。
+	 * @param filename 保存先ファイル名(ローカルパス)
+	 * @return 書いたバイト数。失敗で 0
+	 */
+	function save(filename);
+
+	/** 保持しているデータを明示的に破棄する */
+	function clearData();
+
+	/**
+	 * 直近の失敗理由。無ければ空文字列。
+	 * **成功時にクリアされないので、戻り値が false のときだけ読むこと。**
+	 */
+	property error { getter; }
+	property external_count { getter; } //< 外部チャンク(CHNKExta)の数
+
+	/**
+	 * レイヤ属性を編集する。attr 辞書のうち指定されたキーだけ変更します
+	 *   %[ name:       // レイヤ名
+	 *      opacity:    // 不透明度 0..**256** (CLIP は 256 段。0..255 ではない)
+	 *      visibility: // 表示状態 0/1
+	 *      composite:  // 合成モード(composite_* 定数)
+	 *      clipping:   // 下のレイヤでクリッピングするか
+	 *      folder:     // フォルダ属性 (bit0=フォルダ / bit4=折り畳み)
+	 *    ]
+	 * @param layerId LayerId (CLIP.getLayerInfo().layer_id の値)
+	 * @param attr    属性辞書
+	 * @return 成功したら true
+	 */
+	function setLayerAttr(layerId, attr);
+
+	/**
+	 * レイヤの画素を Layer オブジェクトの内容で差し替える。
+	 *
+	 * **Layer のサイズはそのレイヤの 100% ミップの寸法と一致していなければ
+	 * なりません。これはキャンバスサイズとは限りません** — CSP はレイヤによって
+	 * 256x256 ブロック境界に切り上げた大きさ(300x400 のキャンバスでも 512x512 等)
+	 * で持つことがあります。必要な寸法は読み側の
+	 * `CLIP.getLayerAttribute(レイヤ番号)` の width / height で調べられます:
+	 *
+	 *   var a = clip.getLayerAttribute(3);
+	 *   lay.setImageSize(a.width, a.height);
+	 *   lay.setSizeToImageSize();
+	 *   // ... lay に描く ...
+	 *   w.setPixels(clip.getLayerInfo(3).layer_id, lay);
+	 *
+	 * 寸法が合わないと false が返り、error に
+	 * "pixel size does not match the 100% mipmap" が入ります。
+	 * RGBA プレーンのレイヤのみ対応 (getLayerAttribute().num_channels == 4)。
+	 * @param layerId LayerId
+	 * @param layer   画素供給元 Layer
+	 * @return 成功したら true
+	 */
+	function setPixels(layerId, layer);
+
+	/**
+	 * 既存レイヤを雛形にレイヤを追加する。
+	 * 雛形から表現色などの属性を引き継ぐので、追加元のレイヤを選ぶことが必要です。
+	 * @param name     新しいレイヤ名
+	 * @param copyFrom 雛形にする既存レイヤの LayerId
+	 * @param layer    画素供給元 Layer(省略/void で全面透明)
+	 * @param after    この LayerId の直上に挿す。負値で最上段。既定 -1
+	 * @param parent   親フォルダの LayerId。0 でルート直下。既定 0
+	 * @return 新しいレイヤの LayerId。失敗で 0
+	 */
+	function addLayer(name, copyFrom, layer=void, after=-1, parent=0);
+
+	/**
+	 * レイヤを削除する
+	 * @param layerId LayerId
+	 * @return 成功したら true
+	 */
+	function deleteLayer(layerId);
+
+	/**
+	 * サムネイルの実体だけ落として世代番号を立てる(CSP が開いたときに作り直す)。
+	 * 画素を差し替えたのに古いサムネイルが残るのを避けたいとき用ですが、
+	 * setPixels / addLayer が内部で面倒を見るので通常は呼ぶ必要はありません。
+	 * @param layerId LayerId
+	 * @return 成功したら true
+	 */
+	function dropThumbnail(layerId);
+
+	/**
+	 * 開いた直後に表示される画像(CanvasPreview)を差し替える
+	 * @param layer 画素供給元 Layer
+	 * @return 成功したら true
+	 */
+	function setCanvasPreview(layer);
+
+	/**
+	 * キャンバスの寸法ごと作り替える(ミップ連鎖を伸縮させる)。
+	 * **画素の実体は全部落ちるので、呼んだあと setPixels で入れ直してください。**
+	 * @param width  新しい幅
+	 * @param height 新しい高さ
+	 * @param dpi    解像度(0 で据え置き)。既定 0
+	 * @return 成功したら true
+	 */
+	function resizeCanvas(width, height, dpi=0);
+
+	/**
+	 * 外部 ID の乱数種を固定する(テストで出力の再現性が要るとき)
+	 * @param seed 乱数種
+	 */
+	function setSeed(seed);
+
+	/**
+	 * static method
+	 * 参照整合性を検査する。**CSP で開く前に必ず通すこと。**
+	 * ミップ段数 / 閉路 / 孤児行 / 格納型 / 消えたレイヤへの参照を見ます。
+	 * @param filename 検査するファイル(ローカルパス)
+	 * @return 問題点の文字列配列。空配列なら問題なし
+	 */
+	function validate(filename);
+};

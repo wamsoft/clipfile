@@ -1,0 +1,15 @@
+/packages
+/x86
+/Debug
+/ipch
+/Release
+/build
+/savedata
+/.vs
+/.vscode
+
+# local test CLIP files (if any are dropped here)
+*.clip
+
+# install output
+/install/

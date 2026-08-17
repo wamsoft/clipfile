@@ -1,0 +1,3 @@
+[submodule "external/clipparse"]
+	path = external/clipparse
+	url = https://github.com/wamsoft/clipparse.git
