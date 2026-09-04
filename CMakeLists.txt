@@ -33,6 +33,7 @@ krkrz_plugin(clipfile
         clipclass.cpp
         clipwriter.cpp
         main.cpp
+        LicensesGen.cpp
     LIBRARIES
         clipparse
 )

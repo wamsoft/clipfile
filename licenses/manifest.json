@@ -1,0 +1,7 @@
+{
+  "comment": "clipfile が静的リンクする第三者コンポーネントのライセンス。更新したら core の licenses/gen_licenses_c.py --mode plugin で LicensesGen.cpp を再生成する。zlib は本体収録分と同一なので重複登録しない。",
+  "entries": [
+    { "name": "clipparse", "group": "plugin:clipfile", "license": "MIT", "file": "../external/clipparse/LICENSE", "note": ".clip の解析/書き出しを行う吉里吉里非依存ライブラリ" },
+    { "name": "SQLite", "group": "plugin:clipfile", "license": "パブリックドメイン", "file": "texts/sqlite3.txt", "note": "clipparse が .clip 内のメタ情報 DB を読むために同梱ビルド (amalgamation)" }
+  ]
+}

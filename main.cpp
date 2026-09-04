@@ -198,3 +198,8 @@ void doneStorage()
 
 NCB_PRE_REGIST_CALLBACK(initStorage);
 NCB_POST_UNREGIST_CALLBACK(doneStorage);
+
+// 静的リンクする第三者コンポーネント (clipparse / SQLite) のライセンスを
+// 本体収集機構へ登録 (LicensesGen.cpp = licenses/manifest.json から生成)
+extern void RegisterClipFileLicenses();
+NCB_PRE_REGIST_CALLBACK(RegisterClipFileLicenses);
