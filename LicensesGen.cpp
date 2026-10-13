@@ -59,8 +59,12 @@ static const unsigned char lic_01[] = {
 
 void RegisterClipFileLicenses()
 {
-	TVPRegisterLicense(TJS_W("clipparse"), TJS_W("plugin:clipfile"), lic_00, 632, 1064);
-	TVPRegisterLicense(TJS_W("SQLite"), TJS_W("plugin:clipfile"), lic_01, 368, 454);
+	try {
+		TVPRegisterLicense(TJS_W("clipparse"), TJS_W("plugin:clipfile"), lic_00, 632, 1064);
+		TVPRegisterLicense(TJS_W("SQLite"), TJS_W("plugin:clipfile"), lic_01, 368, 454);
+	} catch (...) {
+		/* 本体が License API を持たない (古い本体) ときは登録しない */
+	}
 }
 
 #else /* !TVP_HAS_LICENSE_API */
