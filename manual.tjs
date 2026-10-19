@@ -241,8 +241,9 @@ class CLIP {
 	function check();
 
 	/**
-	 * static method
 	 * ストレージとして保持されてるキャッシュをクリアする
+	 *
+	 * static メソッド。
 	 */
 	function clearStorageCache();
 };
@@ -417,8 +418,9 @@ class CLIPWriter {
 	function setSeed(seed);
 
 	/**
-	 * static method
-	 * 参照整合性を検査する。**CSP で開く前に必ず通すこと。**
+	 * 参照整合性を検査する
+	 *
+	 * static メソッド。**CSP で開く前に必ず通すこと。**
 	 * ミップ段数 / 閉路 / 孤児行 / 格納型 / 消えたレイヤへの参照を見ます。
 	 * @param filename 検査するファイル(ローカルパス)
 	 * @return 問題点の文字列配列。空配列なら問題なし
